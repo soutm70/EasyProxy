@@ -114,11 +114,43 @@ class VixSrcExtractor:
         _, _, context = await get_shared_browser_context(user_agent)
         page = await context.new_page()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(3000)
-            status = 200
-            content = await page.content()
-            logger.info("shared browser status=%s len=%s for %s", status, len(content) if content else 0, url)
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                await page.wait_for_function("() => window.masterPlaylist || document.body.innerText.includes('token')", timeout=15000)
+            except Exception:
+                await page.wait_for_timeout(3000)
+
+            status = response.status if response else 200
+            browser_data = await page.evaluate(
+                """() => ({
+                    html: document.documentElement.outerHTML,
+                    title: document.title,
+                    masterPlaylist: window.masterPlaylist || null,
+                    canPlayFHD: window.canPlayFHD === true
+                })"""
+            )
+            content = browser_data.get("html") or ""
+            master_playlist = browser_data.get("masterPlaylist")
+            if master_playlist:
+                params = master_playlist.get("params") or {}
+                playlist_url = master_playlist.get("url") or ""
+                synthetic_script = (
+                    "<script>window.masterPlaylist = {"
+                    f"params: {{'token': '{params.get('token', '')}', 'expires': '{params.get('expires', '')}', 'asn': '{params.get('asn', '')}'}}, "
+                    f"url: '{playlist_url}'"
+                    "};"
+                    f"window.canPlayFHD = {'true' if browser_data.get('canPlayFHD') else 'false'};"
+                    "</script>"
+                )
+                content += synthetic_script
+            logger.info(
+                "shared browser status=%s len=%s title=%s master=%s for %s",
+                status,
+                len(content) if content else 0,
+                browser_data.get("title"),
+                bool(master_playlist),
+                url,
+            )
         finally:
             try:
                 await page.close()
