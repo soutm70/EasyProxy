@@ -66,17 +66,14 @@ class MaxstreamExtractor:
         return random.choice(self.proxies) if self.proxies else None
 
     def _get_proxies_for_url(self, url: str) -> list[str]:
-        """Build ordered proxy list for current URL, honoring TRANSPORT_ROUTES first."""
+        """Build ordered proxy list: extractor-specific first, then route/global, then WARP."""
         ordered = []
-
-        route_proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
-        if route_proxy:
-            ordered.append(route_proxy)
-
         for proxy in self.proxies:
             if proxy and proxy not in ordered:
                 ordered.append(proxy)
-
+        route_proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
+        if route_proxy and route_proxy not in ordered:
+            ordered.append(route_proxy)
         return ordered
 
     async def _get_session(self, proxy=None):

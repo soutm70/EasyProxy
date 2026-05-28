@@ -175,19 +175,20 @@ class VixSrcExtractor:
                     raise ExtractorError(f"curl_cffi HTTP error {self.status} for {self.url}")
 
         proxies_to_try = []
+        for proxy in self.proxies or []:
+            if proxy and proxy not in proxies_to_try:
+                proxies_to_try.append(proxy)
         route_proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
         logger.info(
-            "VixSrc curl proxy lookup: url=%s transport_routes=%d extractor_proxies=%d route_proxy=%s",
+            "VixSrc curl proxy lookup: url=%s transport_routes=%d extractor_proxies=%d resolved=%d route_proxy=%s",
             url,
             len(TRANSPORT_ROUTES),
             len(self.proxies or []),
+            len(proxies_to_try),
             route_proxy,
         )
-        if route_proxy:
+        if route_proxy and route_proxy not in proxies_to_try:
             proxies_to_try.append(route_proxy)
-        for proxy in self.proxies or []:
-            if proxy not in proxies_to_try:
-                proxies_to_try.append(proxy)
         # Always try direct connection as last resort
         if None not in proxies_to_try:
             proxies_to_try.append(None)

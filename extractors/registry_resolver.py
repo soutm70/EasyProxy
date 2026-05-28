@@ -35,8 +35,9 @@ def _resolve_sportsonline_proxy(url: str, bypass_warp: bool = False) -> str | No
 
 
 def _build_proxy_list(primary_proxy: str | None = None, extractor_name: str | None = None) -> list[str]:
+    """Build ordered proxy list: extractor-specific first, then route/primary, then GLOBAL_PROXIES."""
     proxies = []
-    for proxy in ([primary_proxy] if primary_proxy else []) + get_extractor_proxies(extractor_name or "") + list(GLOBAL_PROXIES):
+    for proxy in get_extractor_proxies(extractor_name or "") + ([primary_proxy] if primary_proxy else []) + list(GLOBAL_PROXIES):
         if proxy and proxy not in proxies:
             proxies.append(proxy)
     return proxies

@@ -109,12 +109,12 @@ class VidXgoExtractor:
 
     def _get_proxies_for_url(self, url: str) -> list[str]:
         ordered = []
-        route_proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
-        if route_proxy:
-            ordered.append(route_proxy)
         for p in self.proxies:
             if p and p not in ordered:
                 ordered.append(p)
+        route_proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
+        if route_proxy and route_proxy not in ordered:
+            ordered.append(route_proxy)
         return ordered
 
     # ------------------------------------------------------------------ fetch
