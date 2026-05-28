@@ -485,10 +485,15 @@ class VixSrcExtractor:
             logger.info("Trying VixSrc API via curl_cffi proxy rotation: %s", api_url)
             response = await self._make_curl_request(api_url, headers=api_headers)
         except Exception as curl_err:
+            # 404 means content not found — FS won't help, skip cascading fallbacks
+            if "404" in str(curl_err):
+                raise ExtractorError(f"VixSrc API endpoint not found (404): {api_url}")
             logger.warning("curl_cffi failed for API, trying robust: %s", curl_err)
             try:
                 response = await self._make_robust_request(api_url, headers=api_headers)
             except Exception as robust_err:
+                if "404" in str(robust_err):
+                    raise ExtractorError(f"VixSrc content not found (404): {api_url}")
                 logger.warning("Robust failed for API, trying FS fallback: %s", robust_err)
                 response = await self._make_fs_request(
                     api_url,
