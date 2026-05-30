@@ -141,14 +141,40 @@ class HLSProxyStreamingMixin:
             logger.error(f"Error in segment proxy: {str(e)}")
             return web.Response(text=f"Segment error: {str(e)}", status=500)
 
-    async def _proxy_stream(self, request, stream_url, stream_headers, bypass_warp=None, forced_proxy=None):
+    async def _proxy_stream(self, request, stream_url, stream_headers, bypass_warp=None, forced_proxy=None, force_direct=None):
         """Effettua il proxy dello stream con gestione manifest e AES-128"""
         if bypass_warp is None:
             bypass_warp = request.query.get("warp", "").lower() == "off"
+        if force_direct is None:
+            force_direct = self._should_force_direct_from_query(request)
+        else:
+            force_direct = force_direct or self._should_force_direct_from_query(request)
 
-        # Priorità: proxy passato esplicitamente -> proxy in query string
-        forced_proxy = forced_proxy or request.query.get("proxy") or None
+        # Priorità: proxy passato esplicitamente -> proxy in query string.
+        # In forced-direct retry (WARP fallback), ignore proxy query params.
+        forced_proxy = None if force_direct else (forced_proxy or request.query.get("proxy") or None)
         request._ps_forced_proxy = forced_proxy
+        session_proxy = None
+
+        async def retry_direct_after_warp(reason):
+            active_proxy = session_proxy or forced_proxy
+            if (
+                force_direct
+                or not WARP_PROXY_URL
+                or active_proxy != WARP_PROXY_URL
+                or getattr(request, "_warp_direct_retried", False)
+            ):
+                return None
+            request._warp_direct_retried = True
+            logger.warning("WARP failed for %s, retrying direct: %s", stream_url, reason)
+            return await self._proxy_stream(
+                request,
+                stream_url,
+                stream_headers,
+                bypass_warp=True,
+                forced_proxy=None,
+                force_direct=True,
+            )
         try:
             # Ping browser-based extractors to keep shared browser alive
             ext = get_browser_activity_extractor(self.extractors)
@@ -248,7 +274,7 @@ class HLSProxyStreamingMixin:
                 return value[:limit] + "..."
 
             # ✅ Use pooled session for better performance
-            if self._should_force_direct_from_query(request):
+            if force_direct:
                 session = await self._get_session(url=stream_url)
                 session_proxy = None
                 logger.info(
@@ -367,7 +393,7 @@ class HLSProxyStreamingMixin:
                     if not refreshed_url or refreshed_url == stream_url:
                         return None
 
-                if self._should_force_direct_from_query(request):
+                if force_direct:
                     retry_session = await self._get_session(url=refreshed_url)
                     retry_proxy = None
                 else:
@@ -454,6 +480,9 @@ class HLSProxyStreamingMixin:
                         retry_response = await retry_hls_segment_with_fresh_token()
                         if retry_response:
                             return retry_response
+                    warp_retry_response = await retry_direct_after_warp(f"upstream status {resp.status}")
+                    if warp_retry_response:
+                        return warp_retry_response
                     if is_special_cdn and resp.status == 403 and not goto_manifest_processing:
                         retry_result = await self._retry_special_cdn_request(
                             request_target,
@@ -597,6 +626,7 @@ class HLSProxyStreamingMixin:
                         bypass_warp=bypass_warp,
                         disable_ssl=disable_ssl,
                         selected_proxy=forced_proxy, # ✅ PASSA IL PROXY FORZATO
+                        force_direct=force_direct,
                     )
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
@@ -794,6 +824,9 @@ class HLSProxyStreamingMixin:
 
         except (ClientPayloadError, ConnectionResetError, OSError) as e:
             # Errori tipici di disconnessione del client
+            warp_retry_response = await retry_direct_after_warp(e)
+            if warp_retry_response:
+                return warp_retry_response
             logger.info(f"ℹ️ Client disconnected from stream: {stream_url} ({str(e)})")
             return web.Response(text="Client disconnected", status=499)
 
@@ -803,14 +836,24 @@ class HLSProxyStreamingMixin:
             asyncio.TimeoutError,
         ) as e:
             # Errori di connessione upstream
+            warp_retry_response = await retry_direct_after_warp(e)
+            if warp_retry_response:
+                return warp_retry_response
             logger.warning(f"⚠️ Connection lost with source: {stream_url} ({str(e)})")
             return web.Response(text=f"Upstream connection lost: {str(e)}", status=502)
 
         except Exception as e:
             err_msg = str(e)
             if "Connection lost" in err_msg or "Connection reset" in err_msg:
+                warp_retry_response = await retry_direct_after_warp(e)
+                if warp_retry_response:
+                    return warp_retry_response
                 logger.info(f"ℹ️ Stream connection closed by client or server: {stream_url}")
                 return web.Response(text="Connection lost", status=499)
+
+            warp_retry_response = await retry_direct_after_warp(e)
+            if warp_retry_response:
+                return warp_retry_response
 
             # If forced_proxy was set and failed with a proxy/connection error, re-extract
             forced_proxy = getattr(request, '_ps_forced_proxy', None)

@@ -257,6 +257,7 @@ class ManifestRewriter:
         bypass_warp: bool = False,
         disable_ssl: bool = False,
         selected_proxy: str = None,
+        force_direct: bool = False,
     ) -> str:
         """Riscrive gli URL nei manifest HLS per passare attraverso il proxy."""
         lines = manifest_content.split("\n")
@@ -330,6 +331,8 @@ class ManifestRewriter:
             if selected_proxy:
                 # Usiamo un formato pulito per evitare double-encoding
                 header_params += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
+            if force_direct:
+                header_params += "&direct=1"
 
             absolute_variant_url = ManifestRewriter._inherit_query_if_missing(
                 urljoin(base_url, highest_quality_stream["url"]),
@@ -421,6 +424,8 @@ class ManifestRewriter:
         
         if selected_proxy:
             header_params += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
+        if force_direct:
+            header_params += "&direct=1"
 
         # Estrai query params dal base_url per ereditarli se necessario
         base_parsed = urllib.parse.urlparse(base_url)
@@ -476,6 +481,8 @@ class ManifestRewriter:
                         proxy_key_url += "&disable_ssl=1"
                     if selected_proxy:
                         proxy_key_url += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
+                    if force_direct:
+                        proxy_key_url += "&direct=1"
 
                     new_line = line[:uri_start] + proxy_key_url + line[uri_end:]
                     rewritten_lines.append(new_line)

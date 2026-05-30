@@ -16,7 +16,7 @@ from urllib.parse import urlparse, parse_qs
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
-from config import get_connector_for_proxy, get_ordered_proxies_for_url
+from config import get_connector_for_proxy, get_ordered_proxies_for_url, should_allow_direct_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +115,10 @@ class VidXgoExtractor:
     # ------------------------------------------------------------------ fetch
 
     async def _fetch(self, url: str, headers: dict) -> str:
-        """GET `url` trying configured proxies first, then direct fallback."""
-        paths = self._get_proxies_for_url(url) + [None]
+        """GET `url`; direct is allowed only when no proxy is configured."""
+        paths = self._get_proxies_for_url(url)
+        if should_allow_direct_fallback(paths):
+            paths.append(None)
         last_error = None
         for proxy in paths:
             timeout = ClientTimeout(total=25, connect=10, sock_read=20)

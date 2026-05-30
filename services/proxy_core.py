@@ -597,8 +597,13 @@ class HLSProxyCoreMixin:
                 return session, proxy  # Return proxy URL for logging
             except Exception as e:
                 logger.warning(
-                    f"⚠️ Failed to create proxy connector: {e}, falling back to direct"
+                    f"⚠️ Failed to create proxy connector: {e}"
                 )
+                if WARP_PROXY_URL and proxy == WARP_PROXY_URL:
+                    logger.warning("⚠️ WARP proxy unavailable, falling back to direct")
+                    session = await self._get_session(prefer_default_family=prefer_default_family)
+                    return session, None
+                raise
 
         # Fallback to shared non-proxy session
         session = await self._get_session(prefer_default_family=prefer_default_family)

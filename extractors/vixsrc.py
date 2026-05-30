@@ -13,7 +13,7 @@ import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyError as AioProxyError
 from python_socks import ProxyError as PyProxyError
-from config import TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, SELECTED_PROXY_CONTEXT, get_solver_proxy_url, get_extractor_proxies, get_ordered_proxies_for_url, get_preferred_proxy_for_url
+from config import TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, SELECTED_PROXY_CONTEXT, get_solver_proxy_url, get_extractor_proxies, get_ordered_proxies_for_url, get_preferred_proxy_for_url, should_allow_direct_fallback
 from config import PROXY_TEST_TIMEOUT, PROXY_TEST_CONCURRENCY
 from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT
 
@@ -40,6 +40,7 @@ class VixSrcExtractor:
         self.is_vixsrc = True
         self.extractor_name = "vixsrc"
         self.last_used_proxy = None
+        self.last_used_direct = False
         self.flaresolverr_url = FLARESOLVERR_URL
         self.flaresolverr_timeout = FLARESOLVERR_TIMEOUT
         self._fs_cookies = None
@@ -88,7 +89,7 @@ class VixSrcExtractor:
             solver_proxy = get_solver_proxy_url(proxy) if proxy else None
             if solver_proxy and solver_proxy not in proxies_to_try:
                 proxies_to_try.append(solver_proxy)
-        if None not in proxies_to_try:
+        if should_allow_direct_fallback(proxies_to_try):
             proxies_to_try.append(None)
         for proxy in proxies_to_try:
             payload = {"cmd": "request.get", "url": site, "maxTimeout": (self.flaresolverr_timeout + 60) * 1000}
@@ -104,6 +105,7 @@ class VixSrcExtractor:
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
                     self._fs_proxy = proxy
                     self.last_used_proxy = self._normalize_proxy_url(proxy) if proxy else None
+                    self.last_used_direct = proxy is None
                     logger.info(f"VixSrc: FS cookies via {proxy or 'direct'}: {list(self._fs_cookies.keys())}")
                     return
                 logger.warning("FS failed via %s: %s", proxy or "direct", d.get("message", ""))
@@ -186,8 +188,10 @@ class VixSrcExtractor:
             len(proxies_to_try),
             preferred_proxy,
         )
-        # Always try direct connection as last resort
-        if None not in proxies_to_try:
+        # If a proxy is configured, respect it. Direct is only allowed when no
+        # proxy route exists; otherwise direct can win the curl_cffi race and
+        # produce tokens for a different IP than streaming uses.
+        if should_allow_direct_fallback(proxies_to_try):
             proxies_to_try.append(None)
 
         impersonations = ["chrome131", "chrome124", "chrome120"]
@@ -250,6 +254,7 @@ class VixSrcExtractor:
                                     pending.cancel()
                             await asyncio.gather(*tasks, return_exceptions=True)
                             self.last_used_proxy = proxy
+                            self.last_used_direct = proxy is None
                             logger.info("curl_cffi success via %s for %s (imp=%s)", proxy or "direct", url, imp)
                             return response
                         if isinstance(status, int):
@@ -327,6 +332,7 @@ class VixSrcExtractor:
         if proxy:
             proxy = self._normalize_proxy_url(proxy)
         self.last_used_proxy = proxy
+        self.last_used_direct = proxy is None
 
         if self.session is not None and not self.session.closed and self.session_proxy != proxy:
             await self.session.close()
@@ -652,6 +658,7 @@ class VixSrcExtractor:
                     "request_headers": stream_headers,
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                     "selected_proxy": selected_proxy or self.last_used_proxy,
+                    "force_direct": bool(kwargs.get("force_direct")) or (selected_proxy is None and self.last_used_direct),
                 }
 
             if "/embed/" in parsed_url.path:
@@ -797,6 +804,7 @@ class VixSrcExtractor:
                 "request_headers": stream_headers,
                 "mediaflow_endpoint": self.mediaflow_endpoint,
                 "selected_proxy": self.last_used_proxy,
+                "force_direct": self.last_used_proxy is None and self.last_used_direct,
             }
 
         except Exception as e:
