@@ -17,6 +17,7 @@ class HLSProxy(
 
     def __init__(self, ffmpeg_manager=None):
         self.extractors = {}
+        self._extractor_atimes = {}
         self.ffmpeg_manager = ffmpeg_manager
 
         # Inizializza il playlist_builder se il modulo è disponibile
@@ -46,6 +47,7 @@ class HLSProxy(
         # Cache for proxy sessions (proxy_url -> session)
         # This reuses connections for the same proxy to improve performance
         self.proxy_sessions = {}
+        self._proxy_session_atimes = {}  # proxy_url -> last access time
         self.curl_sessions = {}  # Registry for pooled curl_cffi sessions
 
         # Version information
