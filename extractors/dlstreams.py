@@ -171,7 +171,6 @@ class DLStreamsExtractor:
             },
             "mediaflow_endpoint": self.mediaflow_endpoint,
             "captured_manifest": manifest_text,
-            "bypass_warp": self.bypass_warp_active
         }
 
     @staticmethod
@@ -343,7 +342,6 @@ class DLStreamsExtractor:
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                     "captured_manifest": None,
                     "captured_manifests": {stream_url: ""},
-                    "bypass_warp": self.bypass_warp_active
                 }
                 
             except Exception as e:
