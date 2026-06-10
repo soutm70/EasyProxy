@@ -270,11 +270,12 @@ async def shutdown_flaresolverr():
     else:
         try:
             _kill_process_tree(pid, signal.SIGTERM)
+            await asyncio.sleep(2)
+            _kill_process_tree(pid, signal.SIGKILL)
             try:
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                _kill_process_tree(pid, signal.SIGKILL)
                 await asyncio.wait_for(proc.wait(), timeout=5)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                pass
         except ProcessLookupError:
             pass
         except Exception:
