@@ -648,11 +648,17 @@ class VixSrcExtractor:
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError:
+            # Try to extract JSON from HTML (FlareSolverr wraps JSON in <pre>)
             pre_match = re.search(r"<pre[^>]*>(.*?)</pre>", response.text, re.DOTALL)
-            if pre_match:
+            text = html.unescape(pre_match.group(1)) if pre_match else None
+            if not text:
+                # Try to find JSON object anywhere in response
+                json_match = re.search(r'(\{.*"src".*\})', response.text, re.DOTALL)
+                if json_match:
+                    text = json_match.group(1)
+            if text:
                 try:
-                    cleaned = html.unescape(pre_match.group(1))
-                    payload = json.loads(cleaned)
+                    payload = json.loads(text)
                 except json.JSONDecodeError as exc2:
                     raise ExtractorError(f"Invalid API response from {api_url}: {exc2}")
             else:
