@@ -77,6 +77,25 @@ class HLSProxyManifestHandlerMixin:
             if not target_url:
                 return web.Response(text="Missing 'url' or 'd' parameter", status=400)
 
+            # Record stream activity
+            is_segment = (
+                request.path.startswith("/proxy/hls/segment.") or 
+                request.path.startswith("/proxy/mpd/segment.") or 
+                "segment." in request.path
+            )
+            display_url = target_url
+            if url_id and url_id in self.captured_hls_manifest_map:
+                try:
+                    display_url = self.captured_hls_manifest_map[url_id][5] or target_url
+                except Exception:
+                    pass
+            _shared.record_stream_activity(
+                request.remote,
+                display_url,
+                request.headers.get("User-Agent", ""),
+                is_segment=is_segment
+            )
+
             # aiohttp already decodes query parameters once.
             # Do not unquote again here: URLs with embedded encoded separators
             # (for example Firebase Storage object paths using `%2F`) would be
