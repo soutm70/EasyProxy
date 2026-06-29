@@ -13,6 +13,39 @@ from config import FLARESOLVERR_TIMEOUT, FLARESOLVERR_URL
 
 logger = logging.getLogger(__name__)
 
+def _patch_playwright_bug():
+    try:
+        import playwright
+        pw_dir = os.path.dirname(playwright.__file__)
+        possible_paths = [
+            os.path.join(pw_dir, "driver", "package", "lib", "coreBundle.js"),
+        ]
+        for py_ver in ["python3.12", "python3.11", "python3.10"]:
+            possible_paths.append(f"/usr/local/lib/{py_ver}/site-packages/playwright/driver/package/lib/coreBundle.js")
+            possible_paths.append(f"/usr/lib/{py_ver}/site-packages/playwright/driver/package/lib/coreBundle.js")
+
+        for p in possible_paths:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    target = "url: pageError.location.url,"
+                    replacement = 'url: pageError.location ? pageError.location.url : "",'
+                    if target in content:
+                        patched_content = content.replace(target, replacement)
+                        with open(p, "w", encoding="utf-8") as f:
+                            f.write(patched_content)
+                        logger.info(f"[Patch] Successfully patched Playwright bug in {p}")
+                    elif replacement in content:
+                        logger.info(f"[Patch] Playwright bug already patched in {p}")
+                except Exception as e:
+                    logger.warning(f"[Patch] Failed to patch Playwright at {p}: {e}")
+                break
+    except Exception:
+        pass
+
+_patch_playwright_bug()
+
 # Global state
 _mock_server_running = False
 _runner = None
