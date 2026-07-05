@@ -138,6 +138,8 @@ class HLSProxyDashMixin:
                 text="Missing key_url or static_key parameter", status=400
             )
 
+        session = None
+        session_need_close = False
         try:
             # aiohttp already decodes query parameters once.
             # Avoid unquoting again or embedded encoded URLs may break.
@@ -205,6 +207,8 @@ class HLSProxyDashMixin:
                 session, proxy_used = await self._get_proxy_session(
                     key_url, bypass_warp=bypass_warp, forced_proxy=forced_proxy
                 )
+                if proxy_used:
+                    session_need_close = True
                 # ✅ LOG CRITICO: Deve essere info per apparire nei log standard
                 if proxy_used:
                     logger.info(f"🔐 [Key Proxy] Routing through: {proxy_used}")
@@ -298,6 +302,7 @@ class HLSProxyDashMixin:
                             new_proxy = get_proxy_for_url(key_url, bypass_warp=bypass_warp)
                             if new_proxy and new_proxy != proxy_used:
                                 logger.info(f"🔐 Key fetch failed via proxy {proxy_used}, trying rotated proxy: {new_proxy}")
+                                fallback_session = None
                                 try:
                                     fallback_session, _ = await self._get_proxy_session(key_url, bypass_warp=bypass_warp, forced_proxy=new_proxy)
                                     async with fallback_session.get(key_url, headers=headers, ssl=not disable_ssl, allow_redirects=False, timeout=10) as rot_resp:
@@ -314,6 +319,9 @@ class HLSProxyDashMixin:
                                             )
                                 except Exception as fallback_e:
                                     logger.error(f"❌ Key fetch fallback via rotated proxy {new_proxy} failed: {fallback_e}")
+                                finally:
+                                    if fallback_session and not fallback_session.closed:
+                                        await fallback_session.close()
                             elif not new_proxy and (forced_proxy or STRICT_PROXY_CONTEXT.get()):
                                 logger.warning("🔐 Strict proxy mode: no fallback proxy, skipping direct")
                                 return web.Response(text="Proxy failed and strict mode prevents direct fallback", status=502)
@@ -378,6 +386,7 @@ class HLSProxyDashMixin:
                     new_proxy = get_proxy_for_url(key_url, bypass_warp=bypass_warp)
                     if new_proxy and new_proxy != proxy_used:
                         logger.info(f"🔐 Key fetch failed, trying rotated proxy: {new_proxy}")
+                        fallback_session = None
                         try:
                             fallback_session, _ = await self._get_proxy_session(key_url, bypass_warp=bypass_warp, forced_proxy=new_proxy)
                             async with fallback_session.get(key_url, headers=headers, ssl=not disable_ssl, allow_redirects=False, timeout=10) as rot_resp:
@@ -394,6 +403,9 @@ class HLSProxyDashMixin:
                                     )
                         except Exception as fallback_err:
                             logger.error(f"❌ Key fetch fallback via rotated proxy {new_proxy} failed: {fallback_err}")
+                        finally:
+                            if fallback_session and not fallback_session.closed:
+                                await fallback_session.close()
                     elif not new_proxy:
                         logger.warning("🔐 Strict proxy mode: no fallback proxy available")
                         return web.Response(text="Proxy failed and strict mode prevents direct fallback", status=502)
@@ -423,3 +435,6 @@ class HLSProxyDashMixin:
         except Exception as e:
             logger.error(f"❌ Error fetching AES key: {str(e)}")
             return web.Response(text=f"Key error: {str(e)}", status=500)
+        finally:
+            if session_need_close and session and not session.closed:
+                await session.close()
