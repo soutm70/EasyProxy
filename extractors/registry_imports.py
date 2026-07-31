@@ -39,6 +39,7 @@ logger = logging.getLogger("extractors.registry")
     Sports99Extractor,
 ) = None, None, None, None, None, None
 DLStreamsExtractor = None
+IcelandersExtractor = None
 StreamHGExtractor = None
 VidXgoExtractor = None
 EmbedStExtractor = None
@@ -214,7 +215,13 @@ try:
 except Exception as e:
     logger.warning("⚠️ DLStreamsExtractor failed to load: %s", e)
     DLStreamsExtractor = None
-
+try:
+    from extractors.icelanders import IcelandersExtractor
+    logger.info("✅ IcelandersExtractor module loaded.")
+except Exception as e:
+    logger.warning("⚠️ IcelandersExtractor failed to load: %s", e)
+    IcelandersExtractor = None
+    
 try:
     from extractors.embedst import EmbedStExtractor
     logger.info("✅ EmbedStExtractor module loaded.")
@@ -271,6 +278,7 @@ __all__ = [
     "F16PxExtractor",
     "Sports99Extractor",
     "DLStreamsExtractor",
+    "IcelandersExtractor",
     "StreamHGExtractor",
     "VidXgoExtractor",
     "EmbedStExtractor",
