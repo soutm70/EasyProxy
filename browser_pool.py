@@ -4,12 +4,19 @@ from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
+# Known ad-tech domains observed in icelanders.st-style embed pages.
+# Blocking these speeds up page load and avoids wasted script execution.
 AD_BLOCK_DOMAINS = [
     "tabretwicht.com", "effectivecpmnetwork.com", "cleverwebserver.com",
     "adsboosters.xyz", "histats.com", "aclib", "cobnutscopsole.com",
 ]
 
+
 class BrowserPool:
+    """Maintains a single persistent headless Chromium instance for the
+    lifetime of the app, avoiding per-request browser launch overhead.
+    Only lightweight browser contexts are created/destroyed per extraction.
+    """
     _playwright = None
     _browser = None
     _lock = asyncio.Lock()
@@ -22,24 +29,40 @@ class BrowserPool:
                 cls._playwright = await async_playwright().start()
                 cls._browser = await cls._playwright.chromium.launch(
                     headless=True,
-                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"]
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-gpu",
+                    ],
                 )
         return cls._browser
 
     @classmethod
     async def close(cls):
         if cls._browser:
-            await cls._browser.close()
+            try:
+                await cls._browser.close()
+            except Exception:
+                pass
             cls._browser = None
         if cls._playwright:
-            await cls._playwright.stop()
+            try:
+                await cls._playwright.stop()
+            except Exception:
+                pass
             cls._playwright = None
 
 
 async def extract_via_browser_capture(iframe_url: str, referer: str, timeout: int = 12) -> dict | None:
-    """Loads iframe_url in a shared headless browser, captures the first .m3u8 request."""
+    """Loads iframe_url in a shared headless browser context and captures
+    the first .m3u8 network request (URL + request headers).
+
+    Used as a fallback for JS-heavy embed pages (e.g. icelanders.st) where
+    the stream URL is not present in static HTML/JS and only appears after
+    the page's own JavaScript executes and fires a network request.
+    """
     browser = await BrowserPool.get_browser()
-    captured = {}
+    captured: dict = {}
     done = asyncio.Event()
 
     context = await browser.new_context(
@@ -57,6 +80,7 @@ async def extract_via_browser_capture(iframe_url: str, referer: str, timeout: in
             await route.abort()
         else:
             await route.continue_()
+
     await page.route("**/*", route_filter)
 
     def on_request(request):
@@ -73,6 +97,6 @@ async def extract_via_browser_capture(iframe_url: str, referer: str, timeout: in
     except (asyncio.TimeoutError, Exception) as e:
         logger.debug("BrowserPool: capture failed for %s: %s", iframe_url, e)
     finally:
-        await context.close()  # cheap — browser process itself stays alive
+        await context.close()  # cheap - shared browser process stays alive
 
     return captured if captured.get("url") else None
