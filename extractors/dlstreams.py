@@ -19,11 +19,25 @@ from config import (
     get_connector_for_proxy,
     get_preferred_proxy_for_url,
 )
+from browser_pool import extract_via_browser_capture
 
 logger = logging.getLogger(__name__)
 
+
 class ExtractorError(Exception):
     pass
+
+
+# Domains whose embed pages require real JS execution to reveal the
+# stream URL (no atob/source/XOR pattern present in static HTML).
+BROWSER_FALLBACK_DOMAINS = ["icelanders.st"]
+
+# Cache of browser-captured signed URLs: channel_key -> (m3u8_url, expiry_ts)
+# Signed URLs embed a Unix timestamp and appear valid for several minutes;
+# caching avoids re-launching the browser on every player refresh.
+_signed_url_cache: dict[str, tuple[str, float]] = {}
+SIGNED_URL_CACHE_TTL = 240  # seconds - adjust after observing real CDN expiry
+
 
 class DLStreamsExtractor:
     """Extractor for daddy live / dlstreams streams."""
@@ -80,7 +94,7 @@ class DLStreamsExtractor:
             origin = f"{parsed.scheme}://{parsed.netloc}"
             if origin != self.entry_origin:
                 logger.debug("DLStreams entry origin changed from %s to %s", self.entry_origin, origin)
-                self.entry_origin = origin
+            self.entry_origin = origin
             if not self.stream_origin:
                 self.stream_origin = origin
 
@@ -145,19 +159,20 @@ class DLStreamsExtractor:
                         continue
                     if "SIGNED_URL" in decoded or ".m3u8" in decoded:
                         match = re.search(
-                            r"SIGNED_URL\s*=\s*[\"']"
-                            r"(https?://[^\"']+\.m3u8[^\"']*)[\"']",
+                            r"SIGNED_URL\s*=\s*[\"\']"
+                            r"(https?://[^\"\']+\.m3u8[^\"\']*)[\"\']",
                             decoded,
                         )
                         if match:
                             return match.group(1)
-                        match2 = re.search(r"(https?://[^\s\"']+\.m3u8[^\s\"']*)", decoded)
+                        match2 = re.search(r"(https?://[^\s\"\']+\.m3u8[^\s\"\']*)", decoded)
                         if match2:
                             return match2.group(1)
         return None
 
     async def _extract_directly(self, url: str, channel_id: str) -> Dict[str, Any] | None:
-        """Fast path direct HTTP M3U8 extraction without Playwright."""
+        """Fast path direct HTTP M3U8 extraction, with headless-browser fallback
+        for JS-heavy embed domains (e.g. icelanders.st)."""
         session = await self._get_session(url)
         preferred_folder = self._extract_folder(url)
         player_urls = self._prioritize_player_urls(channel_id, preferred_folder)
@@ -193,7 +208,7 @@ class DLStreamsExtractor:
                         logger.debug("DLStreams: bs4 parsing error: %s", e)
 
                 if not iframe_src:
-                    match = re.search(r'<iframe\s+[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
+                    match = re.search(r'<iframe[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
                     if match:
                         iframe_src = match.group(1)
 
@@ -203,37 +218,55 @@ class DLStreamsExtractor:
 
                 logger.debug("DLStreams: found player iframe: %s", iframe_src)
 
-                # Fetch iframe player page
-                iframe_headers = headers.copy()
-                iframe_headers["Referer"] = candidate
-                iframe_headers["Origin"] = self.entry_origin
+                channel_key = f"premium{channel_id}"
+                stream_url = None
 
-                async with session.get(iframe_src, headers=iframe_headers, timeout=10) as resp:
-                    if resp.status != 200:
-                        logger.debug("DLStreams: iframe %s returned status %s", iframe_src, resp.status)
-                        continue
-                    iframe_html = await resp.text()
-
-                # Extract atob(...) Base64 encoded stream URL
-                atob_match = re.search(r"atob\(['\"](.*?)['\"]\)", iframe_html)
-                if not atob_match:
-                    logger.debug("DLStreams: atob parameter not found in iframe HTML. Checking for direct source.")
-                    direct_match = re.search(r"source:\s*['\"](.*?)['\"]", iframe_html)
-                    if not direct_match:
-                        logger.debug("DLStreams: no direct source found. Trying XOR-obfuscated eval blob.")
-                        xor_url = self._try_xor_decode_signed_url(iframe_html)
-                        if not xor_url:
-                            logger.debug("DLStreams: XOR decode also failed. Iframe HTML start: %s", iframe_html[:200])
-                            continue
-                        stream_url = xor_url
-                        logger.debug("DLStreams: extracted XOR-decoded SIGNED_URL: %s", stream_url)
+                # --- Headless-browser fallback path (e.g. icelanders.st) ---
+                if any(d in iframe_src for d in BROWSER_FALLBACK_DOMAINS):
+                    cached = _signed_url_cache.get(channel_key)
+                    if cached and cached[1] > time.time():
+                        logger.debug("DLStreams: using cached browser-captured URL for %s", channel_key)
+                        stream_url = cached[0]
                     else:
-                        stream_url = direct_match.group(1)
-                        logger.debug("DLStreams: extracted direct stream URL: %s", stream_url)
+                        logger.info("DLStreams: %s requires browser capture, launching fallback", iframe_src)
+                        browser_result = await extract_via_browser_capture(iframe_src, referer=candidate)
+                        if not browser_result:
+                            logger.debug("DLStreams: browser capture failed for %s", iframe_src)
+                            continue
+                        stream_url = browser_result["url"]
+                        _signed_url_cache[channel_key] = (stream_url, time.time() + SIGNED_URL_CACHE_TTL)
+                        logger.info("DLStreams: browser-captured stream URL: %s", stream_url)
                 else:
-                    b64_url = atob_match.group(1)
-                    stream_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
-                    logger.debug("DLStreams: decrypted stream URL: %s", stream_url)
+                    # --- Existing browser-less regex extraction path ---
+                    iframe_headers = headers.copy()
+                    iframe_headers["Referer"] = candidate
+                    iframe_headers["Origin"] = self.entry_origin
+
+                    async with session.get(iframe_src, headers=iframe_headers, timeout=10) as resp:
+                        if resp.status != 200:
+                            logger.debug("DLStreams: iframe %s returned status %s", iframe_src, resp.status)
+                            continue
+                        iframe_html = await resp.text()
+
+                    atob_match = re.search(r"atob\([\'\"](.*?)[\'\"]\)", iframe_html)
+                    if not atob_match:
+                        logger.debug("DLStreams: atob parameter not found in iframe HTML. Checking for direct source.")
+                        direct_match = re.search(r"source:\s*[\'\"](.*?)[\'\"]", iframe_html)
+                        if not direct_match:
+                            logger.debug("DLStreams: no direct source found. Trying XOR-obfuscated eval blob.")
+                            xor_url = self._try_xor_decode_signed_url(iframe_html)
+                            if not xor_url:
+                                logger.debug("DLStreams: XOR decode also failed. Iframe HTML start: %s", iframe_html[:200])
+                                continue
+                            stream_url = xor_url
+                            logger.debug("DLStreams: extracted XOR-decoded SIGNED_URL: %s", stream_url)
+                        else:
+                            stream_url = direct_match.group(1)
+                            logger.debug("DLStreams: extracted direct stream URL: %s", stream_url)
+                    else:
+                        b64_url = atob_match.group(1)
+                        stream_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
+                        logger.debug("DLStreams: decrypted stream URL: %s", stream_url)
 
                 # Format response payload
                 parsed_stream = urlparse(stream_url)
@@ -307,6 +340,7 @@ class DLStreamsExtractor:
             headers=self.base_headers,
             cookie_jar=aiohttp.CookieJar(unsafe=True),
         )
+
         self._session_proxy = proxy_url  # Store for future comparison
         return self.session
 
@@ -335,7 +369,7 @@ class DLStreamsExtractor:
         try:
             session = await self._get_session(url)
 
-            # Direct browser-less HTTP extraction (only active path)
+            # Direct browser-less HTTP extraction (with browser fallback for JS-heavy domains)
             try:
                 logger.info("DLStreams: Attempting direct browser-less HTTP extraction for %s", f"premium{channel_id}")
                 direct_result = await self._extract_directly(url, channel_id)
@@ -345,7 +379,7 @@ class DLStreamsExtractor:
             except Exception as direct_exc:
                 logger.error("DLStreams: Direct browser-less extraction failed for %s: %s", f"premium{channel_id}", direct_exc)
 
-            raise ExtractorError("Could not retrieve manifest via browser-less extraction (browser fallback is disabled).")
+            raise ExtractorError("Could not retrieve manifest via browser-less extraction or browser fallback.")
 
         except Exception as e:
             logger.exception(f"DLStreams extraction failed for {url}")
@@ -360,4 +394,4 @@ class DLStreamsExtractor:
         self._inflight_extract_tasks.clear()
         if self.session and not self.session.closed:
             await self.session.close()
-            self.session = None
+        self.session = None
