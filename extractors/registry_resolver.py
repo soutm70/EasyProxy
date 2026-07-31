@@ -237,6 +237,15 @@ async def resolve_extractor(self, url: str, request_headers: dict, host: str = N
                         request_headers, proxies=proxy_list, bypass_warp=bypass_warp
                     )
                 return self.extractors[key]
+            elif host == "icelanders":
+                key = "icelanders_direct" if bypass_warp else "icelanders"
+                if IcelandersExtractor is None:
+                    raise RuntimeError("IcelandersExtractor module not available")
+                if key not in self.extractors:
+                    self.extractors[key] = IcelandersExtractor(
+                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
+                    )        
+                return self.extractors[key]
             elif host in ["embedst", "embedsports", "embed.st", "embedsports.top", "streamed", "streamed.pk"]:
                 key = "embedst_direct" if bypass_warp else "embedst"
                 if key not in self.extractors:
