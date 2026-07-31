@@ -166,8 +166,12 @@ class DLStreamsExtractor:
             try:
                 headers = {
                     "User-Agent": self.base_headers["User-Agent"],
-                    "Referer": url,
+                    "Referer": url,headers = {
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Sec-Fetch-Dest": "iframe",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
                 }
 
                 logger.debug("DLStreams: GET stream page %s", candidate)
