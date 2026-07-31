@@ -14,3 +14,4 @@ cloudscraper
 brotli
 psutil
 pywidevine
+playwright>=1.45.0
