@@ -1,10 +1,10 @@
 services:
   easyproxy:
-    image: ghcr.io/realbestia1/easyproxy:latest
+    image: ghcr.io/soutm70/easyproxy:latest
     container_name: easyproxy
     restart: unless-stopped
     ports:
-      - "7860:7860"
+      - "7861:7860"
     environment:
       #- API_PASSWORD=
       - PORT=7860
