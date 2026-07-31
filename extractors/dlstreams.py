@@ -166,8 +166,8 @@ class DLStreamsExtractor:
             try:
                 headers = {
                     "User-Agent": self.base_headers["User-Agent"],
-                    "Referer": url,headers = {
-                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Referer": url,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
                     "Sec-Fetch-Dest": "iframe",
                     "Sec-Fetch-Mode": "navigate",
@@ -274,7 +274,6 @@ class DLStreamsExtractor:
                 continue
 
         return None
-
 
     async def _get_session(self, url: str | None = None):
         # Determine the correct proxy for the current state
